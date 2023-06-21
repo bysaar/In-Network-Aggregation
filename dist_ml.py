@@ -357,7 +357,7 @@ def test(model, test_loader, test_losses, test_acc):
 
 def run_parameter_server(ps):
     """
-    This function defines the behavior of the parameter-server.
+    This function defines the behavior of the parameter server.
     """
     ps.init_environment()
     train_dataset, train_loader = ps.prepare_dataset(train=True)
@@ -422,6 +422,9 @@ def run_parameter_server(ps):
 
 
 def run_worker(worker):
+    """
+    This function defines the behavior of the worker.
+    """
     worker.init_environment()
     train_subset, train_loader = worker.prepare_dataset(train=True)
     test_subset, test_loader = worker.prepare_dataset(train=False)
@@ -448,8 +451,7 @@ def run_worker(worker):
 
 def run_smart_switch(smart_sw):
     """
-    This function defines the behavior of the parameter-server.
-    :return: None
+    This function defines the behavior of the smart switch.
     """
     smart_sw.init_environment()
     train_dataset, train_loader = smart_sw.prepare_dataset(train=True)
