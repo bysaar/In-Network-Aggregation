@@ -93,9 +93,9 @@ Note: Tshark pcaps can be recorded during the run-time, if you are interested to
 <br />   
 <br />   
 
-
-![res2](https://github.com/bysaar/In-Network-Aggregation/assets/90688449/56bde0e7-80db-4ee6-955d-93e269af0968)
-
+<p align="center">
+  <img src="https://github.com/bysaar/In-Network-Aggregation/assets/90688449/56bde0e7-80db-4ee6-955d-93e269af0968">
+</p>
 
 
 
