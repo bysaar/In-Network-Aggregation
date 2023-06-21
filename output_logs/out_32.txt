@@ -1,0 +1,45 @@
+rank=32, iface=h32-eth0, addr=10.0.0.1, port=9999, world_size=36
+groups=[[0, 32, 33, 34], [32, 1, 2, 35, 8, 9, 10]]
+Initializing smart: rank: 32 | world size: 36 | ParameterServerIP: 10.0.0.1:9999 | Interface: h32-eth0 | Groups: [[0, 32, 33, 34], [32, 1, 2, 35, 8, 9, 10]]
+Process group successfully created.
+
+-----------------------------------------------------
+Smart Global Rank: 32
+Main Group: [0, 32, 33, 34]
+Global Dst: 0
+
+
+Sub Group: [32, 1, 2, 35, 8, 9, 10]
+Global Dst: 32
+Workers: [1, 2, 35, 8, 9, 10]
+
+-----------------------------------------------------
+Train Dataset is loaded:
+Total Batches: 937
+
+----------------------------------------------------------------
+        Layer (type)               Output Shape         Param #
+================================================================
+            Conv2d-1            [-1, 6, 24, 24]             156
+              Tanh-2            [-1, 6, 24, 24]               0
+         AvgPool2d-3            [-1, 6, 12, 12]               0
+            Conv2d-4             [-1, 16, 8, 8]           2,416
+              Tanh-5             [-1, 16, 8, 8]               0
+         AvgPool2d-6             [-1, 16, 4, 4]               0
+            Linear-7                  [-1, 120]          30,840
+              Tanh-8                  [-1, 120]               0
+            Linear-9                   [-1, 84]          10,164
+             Tanh-10                   [-1, 84]               0
+           Linear-11                   [-1, 10]             850
+================================================================
+Total params: 44,426
+Trainable params: 44,426
+Non-trainable params: 0
+----------------------------------------------------------------
+Input size (MB): 0.00
+Forward/backward pass size (MB): 0.08
+Params size (MB): 0.17
+Estimated Total Size (MB): 0.25
+----------------------------------------------------------------
+smart rank 32 finished training.
+

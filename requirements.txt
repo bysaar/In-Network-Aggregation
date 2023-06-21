@@ -1,0 +1,7 @@
+matplotlib==3.6.3
+mininet==2.3.0
+networkx==3.0
+pandas==1.5.3
+torch==1.13.1+cpu
+torchsummary==1.5.1
+torchvision==0.14.1+cpu
