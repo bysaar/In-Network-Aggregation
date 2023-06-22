@@ -1,5 +1,5 @@
 # In-Network Aggregation For Machine Learning
-This repository contains the source code for a Python script that simulates a dynamic tree-based network topology. The topology is capable of performing In-Network Aggregation (INA) at specific locations. 
+This repository contains the source code for a Python script that emulates a dynamic tree-based network topology. The topology is capable of performing In-Network Aggregation (INA) at specific locations. 
 
 Once the network is created, the script executes a distributed machine learning (ML) task on the hosts and records the total training time. The distributed training follows a Parameter-Server (PS) architecture.
 
