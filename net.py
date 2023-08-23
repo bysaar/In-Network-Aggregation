@@ -11,12 +11,16 @@ from mininet.node import OVSKernelSwitch, UserSwitch
 from mininet.node import IVSSwitch
 from mininet.log import setLogLevel, info
 from mininet.link import TCLink, Intf
-import sys, os, argparse
-import pandas as pd
+import argparse, os, sys
+from glob import glob
+
+import re
 import matplotlib.pyplot as plt
 import networkx as nx
+import pandas as pd
+# from networkx.drawing.nx_pydot import graphviz_layout
+# from networkx.drawing.nx_agraph import graphviz_layout
 from networkx.drawing.nx_pydot import graphviz_layout
-from glob import glob
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -83,6 +87,28 @@ def read_workload(file_path):
 def get_subtree(node, adj_dct, smarts_indices):
     """
     DFS-based lookup, used to map for each worker his closest aggregator (smart-switch/ps)
+    :param node: Current node in the lookup
+    :param adj_dct: Dictionary of nodes and their neighbors in the topology.
+    :param smarts_indices: List of smart nodes indices.
+    :return: List of workers in the aggregator's subtree.
+    """
+    if node not in adj_dct:
+        return [node]
+    else:
+        children = adj_dct[node]
+        worker_list = []
+
+        for child in children:
+            if child not in smarts_indices:
+                worker_list.extend(get_subtree(child, adj_dct, smarts_indices))
+            else:
+                worker_list.append(child)
+        return worker_list
+
+
+def get_subtree2(node, adj_dct, smarts_indices):
+    """
+    DFS-based lookup, used to map for each worker his closest aggregator (smart-switch/ps)
     :param node: Current switch in the lookup
     :param adj_dct: Dictionary of nodes and their neighbors in the topology.
     :param smarts_indices: List of smart switches indices.
@@ -102,6 +128,76 @@ def get_subtree(node, adj_dct, smarts_indices):
             return [left] + [right]
 
 
+def update_networkx_tree(paths_dct, leaf_nodes):
+    edges = []
+    for path in paths_dct.values():
+        for idx in range(len(path) - 1):
+            if (path[idx + 1], path[idx]) not in edges:
+                edges.append((path[idx + 1], path[idx]))
+
+    edges = sorted(edges, key=lambda x: str(x[0]))
+    G_new = nx.Graph()
+    G_new.add_node('h0')
+    # Add edges from the edge list
+    for edge in edges:
+        if edge[0] in leaf_nodes:
+            G_new.add_node(edge[0], host=True)
+        else:
+            G_new.add_node(edge[0], host=False)
+        if edge[1] in leaf_nodes:
+            G_new.add_node(edge[1], host=True)
+        else:
+            G_new.add_node(edge[1], host=False)
+        G_new.add_edge(edge[0], edge[1])
+    G_new.nodes['h0']['host'] = True
+    return G_new
+
+
+def path_balancing(G, workers_count, smarts_count):
+    leaf_nodes = [node for node in G.nodes() if G.degree(node) == 1 and node[1] != '0']
+    paths = {}
+    for node in leaf_nodes:
+        extended_path = [node]
+        sp = nx.shortest_path(G, source=node, target='h0')[:-1]
+        for i, switch in enumerate(sp[1:]):
+            if switch not in smarts_sw_indices:
+                extended_path += [str(sp[i]) + 'A', str(sp[i]) + 'B']
+            extended_path.append(switch)
+        paths[node] = extended_path + ['h0']
+    G2 = update_networkx_tree(paths, leaf_nodes)
+    color = ["orange" if G2.nodes[node].get('host') else "blue" if node in smarts_sw_indices else "red" for node in
+             G2.nodes]
+    nx.draw(G2, graphviz_layout(G2, prog="dot"), with_labels=True, node_color=color)
+    plt.savefig(f'Topology_Balanced_{workers_count}_Workers_{smarts_count}_Smarts.png')
+    plt.close()
+    return paths
+
+
+def networkx_tree(adj_dct, workers_map):
+    """
+    Used to pre-process and maintain the data for the mininet emulation
+    :return: NetworkX object of the network.
+    """
+    G = nx.Graph()
+    G.add_node('h0', host=True)
+    G.add_edge('h0', 0)
+    for sw_idx in [0] + [sw_idx for val in adj_dct.values() for sw_idx in val]:
+        G.add_node(sw_idx)
+
+    for sw_idx in adj_dct:
+        for neighbor in adj_dct[sw_idx]:
+            G.add_edge(sw_idx, neighbor)
+
+    curr_rank = 1
+    for sw_idx in workers_map:
+        for _ in range(workers_map[sw_idx]):
+            G.add_node(f'h{curr_rank}', host=True)
+            G.add_edge(f'h{curr_rank}', sw_idx)
+            curr_rank += 1
+
+    return G
+
+
 def complete_tree(worker_switches, smart_switches, workers_map):
     """
     Used to pre-process and maintain the data for the mininet emulation
@@ -117,7 +213,7 @@ def complete_tree(worker_switches, smart_switches, workers_map):
         G.add_node(i, host=False)
     # Add edges to create a complete tree
     for i in range(num_of_leaves):
-        if i == 0: G.add_edge('h0',i)
+        if i == 0: G.add_edge('h0', i)
         left_child = 2 * i + 1
         right_child = 2 * i + 2
         if left_child < num_of_nodes:
@@ -127,13 +223,13 @@ def complete_tree(worker_switches, smart_switches, workers_map):
         if left_child in worker_switches:
             hosts = workers_map[left_child] if left_child not in smart_switches else workers_map[left_child][:-1]
             for host in hosts:
-                G.add_node('h'+str(host),host=True)
-                G.add_edge('h'+str(host),left_child)
+                G.add_node('h' + str(host), host=True)
+                G.add_edge('h' + str(host), left_child)
         if right_child in worker_switches:
             hosts = workers_map[right_child] if right_child not in smart_switches else workers_map[right_child][:-1]
             for host in hosts:
-                G.add_node('h'+str(host),host=True)
-                G.add_edge('h'+str(host),right_child)
+                G.add_node('h' + str(host), host=True)
+                G.add_edge('h' + str(host), right_child)
     return G
 
 
@@ -161,9 +257,11 @@ def process_csv(G):
         epochs = int(train_file.readlines()[3].split(": ")[1])
 
     workers_df = pd.DataFrame()
+    #print(num_of_workers)
     for worker_rank in range(1, num_of_workers + 1):
         worker_df = pd.DataFrame()
         for epoch in range(1, epochs + 1):
+            #print(glob(f'network_csv/epoch_{epoch}_root_{0}_rank_{0}.csv'))
             ps_csv = glob(f'network_csv/epoch_{epoch}_root_{0}_rank_{0}.csv')[0]
             ps_df = pd.read_csv(ps_csv)
             csv = glob(f'network_csv/epoch_{epoch}_root_*_rank_{worker_rank}.csv')[0]
@@ -187,7 +285,8 @@ def process_csv(G):
             else:
                 main_grp_worker_rank = worker_rank
             worker_epoch_df['agg_time'] = accumulated_agg_time
-            worker_epoch_df['comm_time'] = ps_df[str(main_grp_worker_rank)] - worker_epoch_df['comm_batch_start'] - worker_epoch_df['agg_time']
+            worker_epoch_df['comm_time'] = ps_df[str(main_grp_worker_rank)] - worker_epoch_df['comm_batch_start'] - \
+                                           worker_epoch_df['agg_time']
             worker_batch_series = worker_epoch_df.sum()
             new_df = pd.DataFrame(data={'rank': worker_rank, 'epoch_time': worker_batch_series['batch_time'],
                                         'comp_time': worker_batch_series['comp_time'],
@@ -212,123 +311,99 @@ def process_csv(G):
     return
 
 
-def post_processing():
+def pre_processing(adj_map, load_map, workers_count, smarts_count):
+    G = networkx_tree(adj_map, load_map)
+    node_color = ["orange" if G.nodes[node].get('host') else "blue" if node in smarts_sw_indices else "red" for node
+                  in G.nodes]
+    pos = graphviz_layout(G, prog="dot")
+    nx.draw(G, pos, with_labels=True, node_color=node_color)
+    plt.savefig(f'Topology_{workers_count}_Workers_{smarts_count}_Smarts.png')
+    plt.close()
+    return G
+
+
+def post_processing(G):
     """
     Post-process the collected data during the emulation and export the results.
     """
-    #epochs_lst = list(range(1, epochs_num + 1))
-    #accumulated_time = [sum(time[:i]) for i in range(1, len(time) + 1)]
-    #plot_graph("acc_per_epoch.png", "Accuracy Per Epoch", epochs_lst, acc, "Epoch", "Accuracy", 1)
-    #plot_graph("acc_per_time.png", "Accuracy Per Time", accumulated_time, acc, "Time [sec]", "Accuracy", 0)
-    #plot_graph("loss_per_epoch.png", "Loss Per Epoch", epochs_lst, loss, "Epoch", "Accuracy", 1)
-    #plot_graph("loss_per_time.png", "Loss Per Time", accumulated_time, loss, "Time [sec]", "Accuracy", 0)
-    #plot_graph("epoch_per_time.png", "Epoch Per Time", epochs_lst, accumulated_time, "Epoch", "Time [sec]", 1)
-
-    G = complete_tree(workers_sw_indices, smarts_sw_indices, hosts_sw_map)
-    node_color = ["orange" if G.nodes[node].get('host') else "blue" if node in smarts_sw_indices else "red" for node
-                  in G.nodes]
-    pos = graphviz_layout(G, prog="dot", root=0)
-    nx.draw(G, pos, with_labels=True, node_color=node_color)
-    plt.savefig(f'Topology_{num_of_workers}_Workers_{num_of_smarts}_Smarts.png')
+    # epochs_lst = list(range(1, epochs_num + 1))
+    # accumulated_time = [sum(time[:i]) for i in range(1, len(time) + 1)]
+    # plot_graph("acc_per_epoch.png", "Accuracy Per Epoch", epochs_lst, acc, "Epoch", "Accuracy", 1)
+    # plot_graph("acc_per_time.png", "Accuracy Per Time", accumulated_time, acc, "Time [sec]", "Accuracy", 0)
+    # plot_graph("loss_per_epoch.png", "Loss Per Epoch", epochs_lst, loss, "Epoch", "Accuracy", 1)
+    # plot_graph("loss_per_time.png", "Loss Per Time", accumulated_time, loss, "Time [sec]", "Accuracy", 0)
+    # plot_graph("epoch_per_time.png", "Epoch Per Time", epochs_lst, accumulated_time, "Epoch", "Time [sec]", 1)
     process_csv(G)
     return
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 
-def build_network(topology, hosts_sw_dct, num_of_workers):
+def build_network(topology, hosts_sw_dct, num_of_workers, paths):
     """
     :param topology: Dictionary of nodes and their neighbors in the topology.
     :param hosts_sw_dct: Dictionary of switches that are connected to workers.
     :param num_of_workers: Total number of workers participating in the ML task.
     """
-    switches, hosts, red_switches_replica = [], [], []
     options = extract_arguments()
     print(options)
+    print(f'Topology: {topology}\nHosts_Sw_Dct: {hosts_sw_dct}\nNum_Of_Workers: {num_of_workers}')
     net = Mininet(topo=None, build=False, link=TCLink, ipBase='10.0.0.0/8')
 
     info('\n*** Adding controller\n')
     con1 = net.addController(name='con1', controller=Controller, protocol='tcp', port=6633)
 
-    info('\n*** Add switches\n')
-    for sw_idx in [0] + [element for pair in topology.values() for element in pair]:
-        switches.append(net.addSwitch('sw' + str(sw_idx)))
-        info(f'sw{sw_idx} is added\n')
+    switches, hosts, links, smart_links = [], [], [], []
 
-    info('\n*** Adding hosts\n')
-    for sw_idx in hosts_sw_dct:
-        for host in hosts_sw_dct[sw_idx]:
-            hosts.append(net.addHost('h' + str(host)))
-            info(f'h{host} is added\n')
-            if host > num_of_workers:
-                net.addLink(switches[sw_idx], hosts[-1]) # ,bw=options.bandwidth * 8 * 2)
-            else:
-                net.addLink(switches[sw_idx], hosts[-1],bw=options.bandwidth * 8)
-            info(f'h{host} <--> sw{sw_idx}\n')
+    for path in paths:
+        for obj in paths[path]:
+            if type(obj) == str and obj[0] == 'h' and len(obj) == 2 and obj not in hosts:
+                hosts.append(obj)
+            elif obj not in switches:
+                switches.append(obj)
+                if obj in smarts_sw_indices:
+                    hosts.append(f'h{smart_rank_map[obj]}')
+                    smart_links.append((obj, f'h{smart_rank_map[obj]}'))
+    for path_src in paths:
+        for i in range(len(paths[path_src]) - 1):
+            if (paths[path_src][i], paths[path_src][i + 1]) not in links:
+                links.append((paths[path_src][i], paths[path_src][i + 1]))
 
-    info('\n*** Add links\n')
-    # SW <--> SW:
-    for sw_idx in topology.keys():
-        for neighbor in topology[sw_idx]:
-            if sw_idx in smarts_sw_indices:
-                if neighbor in smarts_sw_indices or (neighbor not in smarts_sw_indices and neighbor not in workers_sw_indices):
-                    net.addLink(switches[sw_idx], switches[neighbor], bw=options.bandwidth * 8)
-                    info(f'sw{sw_idx} <--> sw{neighbor}\n')
+
+    #info(f'hosts: {hosts}\n')
+    #info(f'switches: {switches}\n')
+    #info(f'links: {links}\n')
+    #info(f'->->->->\n')
+    link_bw = options.bandwidth * 8
+    mininet_hosts, mininet_switches = [], []
+
+    info("\n*** Add Switches: ***\n")
+    for switch in switches:
+        mininet_switches.append(net.addSwitch(f'{switch}'))
+        info(f'{switch} is added\n')
+
+    info("\n*** Add Hosts: ***\n")
+    for host in sorted(hosts, key=lambda host: int(re.search(r'\d+', host).group())):
+        mininet_hosts.append(net.addHost(f'{host}'))
+        info(f'host {host} is added\n')
+
+    info("\n*** Add Links: ***\n")
+    for link in links:
+        net.addLink(f'{link[0]}', f'{link[1]}', bw=link_bw)
+        info(f'{link[0]} <--> {link[1]} | bw=limited\n')
+    for link in smart_links:
+        net.addLink(f'{link[0]}', f'{link[1]}')
+        info(f'{link[0]} <--> {link[1]} | bw=unlimited\n')
 
     info("\n--------------------\n")
-    info('*** Starting network\n')
+    info('*** Starting network ***\n')
     net.build()
-    info('\n*** Starting controllers\n')
+    info('\n*** Starting controllers ***\n')
     for controller in net.controllers:
         controller.start()
 
-    info('*** Starting switches\n')
-    replica_switches = []
-
-    for i in range(len(switches)//2):
-        # Path-Balancing:
-        # ---------------
-        if i not in smarts_sw_indices:
-            replica_switches.append(net.addSwitch('sw'+ str(i) + 'la'))
-            replica_switches.append(net.addSwitch('sw' + str(i) + 'lb'))
-            net.addLink(switches[i], replica_switches[-2], bw=options.bandwidth * 8)
-            net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth * 8)
-            if 2*i+1 in workers_sw_indices and 2*i+1 not in smarts_sw_indices:
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'lc'))
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'ld'))
-                net.addLink(replica_switches[-3], replica_switches[-2], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth * 8)
-            net.addLink(replica_switches[-1], switches[2 * i + 1], bw=options.bandwidth * 8)
-
-            replica_switches.append(net.addSwitch('sw'+ str(i) + 'ra'))
-            replica_switches.append(net.addSwitch('sw'+ str(i) + 'rb'))
-            net.addLink(switches[i], replica_switches[-2], bw=options.bandwidth * 8)
-            net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth*8)
-            if 2*i+2 in workers_sw_indices and 2*i+2 not in smarts_sw_indices:
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'rc'))
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'rd'))
-                net.addLink(replica_switches[-3], replica_switches[-2], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth * 8)
-            net.addLink(replica_switches[-1], switches[2 * i + 2], bw=options.bandwidth * 8)
-        else:
-            if 2*i+1 not in smarts_sw_indices and 2*i+1 in workers_sw_indices:
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'la'))
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'lb'))
-                net.addLink(switches[i], replica_switches[-2], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-1], switches[2 * i + 1], bw=options.bandwidth * 8)
-            if 2*i+2 not in smarts_sw_indices and 2*i+2 in workers_sw_indices:
-                info(f"-->{2*i+2}\n")
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'ra'))
-                replica_switches.append(net.addSwitch('sw' + str(i) + 'rb'))
-                net.addLink(switches[i], replica_switches[-2], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-2], replica_switches[-1], bw=options.bandwidth * 8)
-                net.addLink(replica_switches[-1], switches[2 * i + 2], bw=options.bandwidth * 8)
-
-    for tree_sw in switches:
+    for tree_sw in mininet_switches:
         tree_sw.start([con1])
-    for replica_sw in replica_switches:
-        replica_sw.start([con1])
 
     # ------------------------------------------------------------------------------------------------------------------
     info('\n*** Post configure switches and hosts\n\n')
@@ -340,11 +415,11 @@ def build_network(topology, hosts_sw_dct, num_of_workers):
     info(f'{CGREEN}Host Groups{CEND}: {rank_groups}\n\n')
 
     # Debug:
-    #info(f'{CGREEN}Group Mapping{CEND}: {group_mapping}\n')
+    # info(f'{CGREEN}Group Mapping{CEND}: {group_mapping}\n')
 
     # Connectivity Check:
     net.pingAll()
-    #net.iperfAll()
+    # net.iperfAll()
 
     # Background Note:
     info(
@@ -354,8 +429,8 @@ def build_network(topology, hosts_sw_dct, num_of_workers):
     # Initiate the distributed ML task:
     waiting_lst = []
     for i in range(world_size):
-        p = net.get('h' + str(i)).popen(
-            f"sudo python3 dist_ml.py {options.master_addr} {options.master_port} {world_size} "
+        #info(f'host {host} - {i}\n')
+        p = net.get('h' + str(i)).popen(f"sudo python3 dist_ml.py {options.master_addr} {options.master_port} {world_size} "
             f"{i} {options.epochs} {options.batch_size} {options.learning_rate} "
             f"{str(group_mapping[i]).replace(' ', '')} {num_of_smarts}")
         waiting_lst.append(p)
@@ -432,7 +507,8 @@ for smart_sw_idx in smarts_sw_indices:
         sub_group = [hosts_sw_map[smart_sw_idx][1]]
 
         for sw in groups[smart_sw_idx]:
-            if sw == 0: continue
+            if sw == 0:
+                continue
             elif sw in workers_sw_indices and sw in smarts_sw_indices:
                 sub_group.append(hosts_sw_map[sw][-1])
             else:
@@ -440,7 +516,7 @@ for smart_sw_idx in smarts_sw_indices:
                     sub_group.append(worker_rank)
         rank_groups[hosts_sw_map[smart_sw_idx][1]] = sub_group
     elif smart_sw_idx in workers_sw_indices:
-        rank_groups[hosts_sw_map[smart_sw_idx][-1]] = [hosts_sw_map[smart_sw_idx][-1]]+hosts_sw_map[smart_sw_idx][:-1]
+        rank_groups[hosts_sw_map[smart_sw_idx][-1]] = [hosts_sw_map[smart_sw_idx][-1]] + hosts_sw_map[smart_sw_idx][:-1]
 
 smart_rank_map = {}
 for smart in smarts_sw_indices:
@@ -454,7 +530,6 @@ for root_rank in sorted(rank_groups.keys()):
         else:
             group_mapping[rank] = [rank_groups[root_rank]]
 
-
 # Cleanup directory and initialize the emulation:
 # -----------------------------------------------
 os.system("rm -r error_logs")
@@ -463,13 +538,16 @@ os.system("rm -r network_csv")
 os.system("rm -r tshark_logs")
 os.system("rm -r wireshark_pcaps")
 os.system("mkdir error_logs")
-error_log = open("error_logs/err_net.txt","w")
+error_log = open("error_logs/err_net.txt", "w")
 sys.stderr = error_log
 os.system("mkdir wireshark_pcaps")
 os.system("mkdir output_logs")
 os.system("mkdir network_csv")
 os.system("mkdir tshark_logs")
 setLogLevel('info')
-build_network(adj_map, hosts_sw_map, num_of_workers)
-post_processing()
+#
+G_unbalanced = pre_processing(adj_map, load_map, num_of_workers, num_of_smarts)
+paths_dict = path_balancing(G_unbalanced, num_of_workers, num_of_smarts)
+build_network(adj_map, hosts_sw_map, num_of_workers, paths_dict)
+post_processing(G_unbalanced)
 # ----------------------------------------------------------------------------------------------------------------------

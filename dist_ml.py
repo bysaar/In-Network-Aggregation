@@ -1,8 +1,3 @@
-# In-Network Aggregation: Distributed ML Source Code
-# ----------------------------------------------------------------------------------------------------------------------
-
-# Libraries:
-# ----------
 import os, sys, subprocess
 import torch
 import torch.distributed as dist
@@ -21,12 +16,7 @@ import time
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Classes:
-# ----------------------------------------------------------------------------------------------------------------------
-
 class TsharkCapture:
-    """ T-shark link monitoring class. """
-
     def __init__(self, node_iface, node_type, node_rank):
         self.iface = node_iface
         self.type = node_type
@@ -37,23 +27,16 @@ class TsharkCapture:
         self.tshark_process = None
 
     def start(self, epoch):
-        """
-        Start tshark capture
-        :return: None
-        """
         if self.tshark_process is not None:
             raise ValueError("tshark process is already running.")
 
-        cmd = ["tshark", "-w", f'wireshark_pcaps/Smarts_{smarts_count}_Epoch_{epoch}_{self.filename}.pcapng', "-F",
-               "pcapng", "-i", f'{self.iface}', "-f", "tcp"]
+        # filename = f"{self.type}_{self.rank}_{self.iface}.pcapng"
+        cmd = ["tshark", "-w", f'wireshark_pcaps/Smarts_{smarts_count}_Epoch_{epoch}_{self.filename}.pcapng', "-F", "pcapng",
+               "-i",f'{self.iface}', "-f", "tcp"]
 
         self.tshark_process = subprocess.Popen(cmd, stderr=self.tshark_error_log)
 
     def stop(self, epoch):
-        """
-        Stop capture and save the pccap file
-        :return: None
-        """
         time.sleep(1)
         if self.tshark_process is None:
             raise ValueError("tshark process is not running.")
@@ -68,9 +51,8 @@ class TsharkCapture:
 
 
 class Node:
-    """ Distributed ML general node implementation. """
-
     def __init__(self, rank, world_size, groups, smarts_count):
+
         self.rank = rank
         self.world_size = world_size
         self.groups = groups
@@ -98,7 +80,7 @@ class Node:
         self.error_log = open(f'error_logs/err_{self.rank}.txt', 'w')
         self.output_log = open(f'output_logs/out_{self.rank}.txt', 'w')
 
-        # Tshark Capture Object
+        # Tshark Capture
         self.capture = None
 
     def init_environment(self):
@@ -110,7 +92,6 @@ class Node:
         sys.stdout = self.output_log
         sys.stderr = self.error_log
 
-        # GLOO backend environment setup
         os.environ['MASTER_ADDR'] = master_addr
         os.environ["MASTER_PORT"] = master_port
         os.environ['GLOO_SOCKET_IFNAME'] = self.iface
@@ -121,15 +102,14 @@ class Node:
             f'rank={self.rank}, iface={self.iface}, addr={master_addr}, port={master_port}, world_size={self.world_size}\n'
             f'groups={self.groups}\n')
 
-        # Equal initial state:
         torch.manual_seed(0)
-
         # Init Tshark Capture:
         self.capture = TsharkCapture(self.iface, self.type, self.rank)
 
         # Process Group Initialization:
         print(f'Initializing {self.type}: rank: {self.rank} | world size: {self.world_size} | ParameterServerIP: '
               f'{master_addr}:{master_port} | Interface: {self.iface} | Groups: {self.groups}')
+
         dist.init_process_group(backend='gloo', init_method='env://', world_size=self.world_size, rank=self.rank)
 
         # Main group is a unique process group for workers / parameter server.
@@ -151,7 +131,7 @@ class Node:
 
     def prepare_dataset(self, train=True):
         """
-        This method handling all the data preparation, distributed sampling for workers and full load for the ps.
+        This function handling all the data preparation, distributed sampling for workers and full load for the ps.
         :param isTrain: Boolean flag used to indicate which type of dataset is needed either train or test.
         :return: Dataset object, Dataloader object
         """
@@ -176,8 +156,8 @@ class Node:
 
     def average_gradients(self, model):
         """
-        This method performs the gradient aggregation and synchronizes the result among the workers.
-        :param model: Neural network object, Used to iterate over each parameter and transfer the matching gradient
+        This function performs the gradient aggregation and synchronizes the result among the workers.
+        :param model: Neural network object, Used to iterate over each parameter and collect its gradient.
         :return: None
         """
         # Using reduce & broadcast methods to transfer the gradients between ps and workers.
@@ -199,21 +179,19 @@ class Node:
         return model
 
     def measured_send(self, tensor, dst, idx):
-        """ :return: None"""
+        # Send the tensor
         if self.type == "worker" and idx == 0:
             self.comm_curr_batch_start = timer()
         dist.send(tensor=tensor, dst=dst)
         return
 
     def measured_recv(self, tensor, worker, idx):
-        """ :return: None"""
         if self.type == "ps" and idx == self.num_params - 1:
             self.comm_batch_end_arr[self.group_workers.index(worker)].append(timer())
         dist.recv(tensor=tensor, src=worker)
         return
 
     def measured_broadcast(self, tensor, src, idx):
-        """ :return: None"""
         if self.rank == src:
             send_threads = []
             for i, worker in enumerate(self.group_workers):
@@ -226,7 +204,10 @@ class Node:
             self.measured_recv(tensor, src, idx)
 
     def measured_reduce(self, tensor, dst, idx):
-        """ :return: The reduced tensor for the root in subtree."""
+        """
+        Returns:
+            The reduced tensor on the subtree root.
+        """
         if self.rank == dst:
             # Gather Operation:
             tensor, receive_threads = torch.zeros_like(tensor), []
@@ -252,10 +233,11 @@ class Node:
 # Models:
 # ----------------------------------------------------------------------------------------------------------------------
 
-# Imported Models:
-# ----------------
-
 def mnist_resnet50(model=resnet50()):
+    """
+    :param model:
+    :return:
+    """
     # Import & edit Resnet50 neural network architecture to fit MNIST dataset:
     # Input Layer: Replace 3-dimension input layer to a single dimension one (RGB to Grayscale)
     # Output Layer: 10 Classes - One for each digit (0-9)
@@ -273,9 +255,6 @@ def mnist_resnet18(model=resnet18()):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-
-# LeNet-5 Implementation:
-# -----------------------
 
 class LeNet(nn.Module):
     def __init__(self):
@@ -313,6 +292,8 @@ def train(node, model, train_loader, optimizer, epoch, train_losses, train_count
         # Network: Communication + Synchronization
         # ----------------------------------------
         node.average_gradients(model=model)
+        # ----------------------------------------
+        # Local Computation Continue
         # ----------------------------------------
         optimizer.step()
         # ----------------------------------------
@@ -357,13 +338,14 @@ def test(model, test_loader, test_losses, test_acc):
 
 def run_parameter_server(ps):
     """
-    This function defines the behavior of the parameter server.
+    This function defines the behavior of the parameter-server.
     """
     ps.init_environment()
     train_dataset, train_loader = ps.prepare_dataset(train=True)
     test_dataset, test_loader = ps.prepare_dataset(train=False)
 
     time_tracker = []
+    # model = mnist_resnet18()
     model = LeNet()
 
     ps.num_params = len(list(model.parameters()))
@@ -392,7 +374,7 @@ def run_parameter_server(ps):
     dist.barrier()
 
     for epoch in range(1, epochs + 1):
-        # ps.capture.start(epoch)
+        #ps.capture.start(epoch)
         epoch_start = timer()
         agg_time = []
         for batch in range(len(train_loader) // (world_size - 1 - smarts_count)):
@@ -408,7 +390,7 @@ def run_parameter_server(ps):
             df_format[worker] = ps.comm_batch_end_arr[ps.group_workers.index(worker)]
 
         pd.DataFrame(data=df_format).to_csv(f'network_csv/epoch_{epoch}_root_{ps.main_global_dst}_rank_{ps.rank}.csv')
-        # ps.capture.stop(epoch)
+        #ps.capture.stop(epoch)
         ps.comm_batch_end_arr = [[] for _ in ps.group_workers]
         test(model, test_loader, test_losses, test_acc)
     dist.barrier()
@@ -422,12 +404,10 @@ def run_parameter_server(ps):
 
 
 def run_worker(worker):
-    """
-    This function defines the behavior of the worker.
-    """
     worker.init_environment()
     train_subset, train_loader = worker.prepare_dataset(train=True)
     test_subset, test_loader = worker.prepare_dataset(train=False)
+    # model = mnist_resnet18()
     model = LeNet()
 
     optimizer = optim.Adam(model.parameters(), learning_rate)
@@ -438,9 +418,9 @@ def run_worker(worker):
     dist.barrier()
 
     for epoch in range(1, epochs + 1):
-        # worker.capture.start(epoch)
+        #worker.capture.start(epoch)
         train(worker, model, train_loader, optimizer, epoch, train_losses, train_counter)
-        # worker.capture.stop(epoch)
+        #worker.capture.stop(epoch)
     test(model, test_loader, test_losses, test_acc)
     dist.barrier()
     print(f'{worker.type} rank {worker.rank} finished training.\n')
@@ -451,11 +431,15 @@ def run_worker(worker):
 
 def run_smart_switch(smart_sw):
     """
-    This function defines the behavior of the smart switch.
+    This function defines the behavior of the parameter-server.
+    :return: None
     """
     smart_sw.init_environment()
     train_dataset, train_loader = smart_sw.prepare_dataset(train=True)
+    # test_dataset, test_loader = smart_sw.prepare_dataset(train=False)
+    # model = mnist_resnet18()
     model = LeNet()
+    # optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum)
     optimizer = optim.Adam(model.parameters(), learning_rate)
     criterion = nn.CrossEntropyLoss()
 
@@ -473,7 +457,7 @@ def run_smart_switch(smart_sw):
     # Distribute average gradients
     dist.barrier()
     for epoch in range(1, epochs + 1):
-        # smart_sw.capture.start(epoch)
+        #smart_sw.capture.start(epoch)
         agg_time = []
         for batch in range(len(train_loader) // (world_size - 1 - smarts_count)):
             smart_sw.agg_batch_time = 0
@@ -486,7 +470,7 @@ def run_smart_switch(smart_sw):
         df_sub_format = {'aggregation_time': agg_time}
         pd.DataFrame(data=df_sub_format).to_csv(f'network_csv/epoch_{epoch}_root_{smart_sw.sub_global_dst}_rank_'
                                                 f'{smart_sw.rank}.csv')
-        # smart_sw.capture.stop(epoch)
+        #smart_sw.capture.stop(epoch)
 
     # print(f'Distributed training done. | Total time elapsed: {end_time - start_time} [Seconds].\n')
     dist.barrier()
@@ -495,10 +479,10 @@ def run_smart_switch(smart_sw):
     smart_sw.output_log.close()
     return
 
-
 # ----------------------------------------------------------------------------------------------------------------------
 # Main Script:
 # ----------------------------------------------------------------------------------------------------------------------
+error_log = open("error_logs/err_main.txt","w")
 master_addr, master_port = sys.argv[1], sys.argv[2]
 epochs, batch_size = int(sys.argv[5]), int(sys.argv[6])
 learning_rate = float(sys.argv[7])
@@ -513,5 +497,5 @@ elif node.type == "worker":
     run_worker(node)
 else:
     run_smart_switch(node)
-# ----------------------------------------------------------------------------------------------------------------------
 
+error_log.close()
